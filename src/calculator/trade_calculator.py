@@ -2,7 +2,7 @@
 Contains the TradeCalculator class for performing pre-trade calculations
 like lot size, risk/reward, and position value.
 """
-
+import MetaTrader5 as mt5
 from src.config.logger import get_logger
 from src.mt5_manager.connection import get_connection
 from src.mt5_manager.utils import (
@@ -27,67 +27,52 @@ class TradeCalculator:
     ) -> float:
         """
         Calculates the appropriate lot size for a trade based on risk percentage.
-
-        Args:
-            account_balance (float): The total account balance.
-            risk_percent (float): The percentage of the account to risk (e.g., 1.0 for 1%).
-            sl_pips (float): The stop loss distance in pips.
-            symbol (str): The symbol for the trade (e.g., "EURUSD").
-
-        Returns:
-            float: The calculated lot size, normalized for the symbol. Returns 0.0 on failure.
         """
-        if not self.conn.is_connected():
-            logger.error("Cannot calculate lot size, MT5 connection not available.")
-            return 0.0
-
-        if sl_pips <= 0 or risk_percent <= 0:
-            logger.warning("SL pips and risk percent must be positive values.")
+        if not self.conn.is_connected() or sl_pips <= 0 or risk_percent <= 0:
             return 0.0
 
         symbol_info = self.conn.get_symbol_info(symbol)
         if not symbol_info:
-            logger.error(f"Could not retrieve symbol info for {symbol}.")
             return 0.0
 
         # 1. Calculate the monetary risk amount
         risk_amount = account_balance * (risk_percent / 100.0)
 
-        # 2. Get correct symbol properties from the SymbolInfo object
+        # 2. Get symbol properties
         point = symbol_info.point
-        # CORRECTED ATTRIBUTE NAMES:
-        tick_value = symbol_info.trade_tick_value
         tick_size = symbol_info.trade_tick_size
+        calc_mode = symbol_info.trade_calc_mode
 
-        # Determine the pip size (0.0001 for 4-digit forex, 0.01 for JPY pairs)
-        pip_size = 0.0001 if symbol_info.digits in [4, 5] else 0.01
+        # 3. HYBRID LOGIC: Select the correct tick value based on calculation mode
+        log_msg = ""
+        if calc_mode == mt5.SYMBOL_CALC_MODE_FOREX:
+            # For Forex pairs, broker's value is reliable as it includes currency conversion (e.g., JPY to USD).
+            tick_value = symbol_info.trade_tick_value
+            log_msg = "Using Broker Tick Value (Forex)"
+        else:
+            # For CFDs/Metals quoted in account currency, manual calculation is more reliable.
+            contract_size = symbol_info.trade_contract_size
+            tick_value = contract_size * tick_size
+            log_msg = "Using Manual Tick Value (CFD/Metal)"
 
-        # 3. Calculate the monetary value of the stop loss for one lot
-        if tick_size <= 0:
-            logger.error(f"Invalid tick_size ({tick_size}) for symbol {symbol}.")
-            return 0.0
-
-        # Value of a 1 pip move for 1 lot
-        value_per_pip = (pip_size / tick_size) * tick_value
-
-        # Total value of the stop loss
-        sl_value_per_lot = sl_pips * value_per_pip
+        # 4. Determine pip size and SL value
+        pip_size = point * 10
+        pips_to_ticks_ratio = pip_size / tick_size
+        sl_value_per_lot = sl_pips * pips_to_ticks_ratio * tick_value
 
         if sl_value_per_lot <= 0:
-            logger.error(
-                f"Calculated SL value per lot is zero or negative ({sl_value_per_lot:.4f})."
-            )
             return 0.0
 
-        # 4. Calculate the final lot size
+        # 5. Calculate final lot size
         lot_size = risk_amount / sl_value_per_lot
         final_lot_size = normalize_lot(symbol, lot_size)
 
+        value_per_pip_per_lot = pips_to_ticks_ratio * tick_value
         logger.info(
-            f"Calc: Balance={account_balance:,.2f}, Risk={risk_percent}%, SL={sl_pips} pips, Symbol={symbol}"
+            f"Calc: Balance={account_balance:,.2f}, Risk={risk_percent}%, SL={sl_pips} pips, Symbol={symbol} [{log_msg}]"
         )
         logger.info(
-            f" -> Risk Amount={risk_amount:,.2f}, Value per Pip/Lot={value_per_pip:,.2f}"
+            f" -> Risk Amount={risk_amount:,.2f}, Value per Pip/Lot={value_per_pip_per_lot:,.2f}"
         )
         logger.info(
             f" -> SL Value/Lot={sl_value_per_lot:,.2f}, Raw Lot={lot_size:.4f} -> Normalized Lot={final_lot_size}"
@@ -95,71 +80,46 @@ class TradeCalculator:
 
         return final_lot_size
 
-    def calculate_rr(
-        self, symbol: str, entry_price: float, sl_price: float, tp_price: float
-    ) -> float:
-        """
-        Calculates the risk-to-reward ratio of a trade.
-
-        Args:
-            symbol (str): The trade's symbol.
-            entry_price (float): The entry price.
-            sl_price (float): The stop loss price.
-            tp_price (float): The take profit price.
-
-        Returns:
-            float: The reward ratio (e.g., 2.5 for a 1:2.5 R:R). Returns 0.0 if SL is invalid.
-        """
+    def calculate_rr(self, symbol, entry_price, sl_price, tp_price):
         if sl_price == 0.0 or tp_price == 0.0:
-            logger.warning("SL or TP price is zero, cannot calculate R:R.")
             return 0.0
-
         risk_pips = calculate_pips(symbol, entry_price, sl_price)
         reward_pips = calculate_pips(symbol, entry_price, tp_price)
-
         if risk_pips <= 0:
-            logger.error(
-                "Risk (pips from entry to SL) is zero or negative. Cannot calculate R:R."
-            )
             return 0.0
-
         rr_ratio = reward_pips / risk_pips
-
         logger.info(
             f"R:R Calc: Risk={risk_pips:.1f} pips, Reward={reward_pips:.1f} pips -> Ratio=1:{rr_ratio:.2f}"
         )
-
         return rr_ratio
 
-    def validate_price_levels(
-        self,
-        symbol: str,
-        order_type: int,
-        entry_price: float,
-        sl_price: float,
-        tp_price: float,
-    ) -> tuple[bool, str]:
+    def calculate_pip_distance(
+        self, symbol: str, price_start: float, price_end: float
+    ) -> float:
         """
-        Validates if entry, SL, and TP prices are logical for a given order type.
+        Calculates the distance in pips between two price points.
+        This is a wrapper for the utility function to keep calculations within the class.
 
         Args:
-            symbol (str): The symbol to validate against.
-            order_type (int): The MT5 order type constant.
-            entry_price (float): The proposed entry price.
-            sl_price (float): The proposed stop loss price.
-            tp_price (float): The proposed take profit price.
+            symbol (str): The symbol to calculate for.
+            price_start (float): The starting price.
+            price_end (float): The ending price.
 
         Returns:
-            tuple[bool, str]: A tuple containing a boolean (True if valid) and a message.
+            float: The distance in pips (always a positive value).
         """
-        import MetaTrader5 as mt5
+        pip_distance = calculate_pips(symbol, price_start, price_end)
+        logger.info(
+            f"Pip Distance Calc: {symbol} from {price_start} to {price_end} = {pip_distance:.1f} pips"
+        )
+        return pip_distance
 
-        ask = get_current_ask(symbol)
-        bid = get_current_bid(symbol)
+    def validate_price_levels(
+        self, symbol, order_type, entry_price, sl_price, tp_price
+    ):
+        ask, bid = get_current_ask(symbol), get_current_bid(symbol)
         if not ask or not bid:
-            return False, "Could not fetch current market price for validation."
-
-        # General SL/TP sanity checks
+            return False, "Could not fetch market price."
         is_buy = order_type in [
             mt5.ORDER_TYPE_BUY,
             mt5.ORDER_TYPE_BUY_LIMIT,
@@ -167,29 +127,22 @@ class TradeCalculator:
         ]
         if sl_price != 0.0:
             if is_buy and sl_price >= entry_price:
-                return False, f"SL for a BUY order must be below the entry price."
+                return False, "SL for BUY must be below entry."
             if not is_buy and sl_price <= entry_price:
-                return False, f"SL for a SELL order must be above the entry price."
-
+                return False, "SL for SELL must be above entry."
         if tp_price != 0.0:
             if is_buy and tp_price <= entry_price:
-                return False, f"TP for a BUY order must be above the entry price."
+                return False, "TP for BUY must be above entry."
             if not is_buy and tp_price >= entry_price:
-                return False, f"TP for a SELL order must be below the entry price."
-
-        # Pending order entry price checks
+                return False, "TP for SELL must be below entry."
         if order_type == mt5.ORDER_TYPE_BUY_LIMIT and entry_price >= ask:
-            return False, f"BUY LIMIT entry price must be below the current ask price."
-
+            return False, "BUY LIMIT must be below ask."
         if order_type == mt5.ORDER_TYPE_BUY_STOP and entry_price <= ask:
-            return False, f"BUY STOP entry price must be above the current ask price."
-
+            return False, "BUY STOP must be above ask."
         if order_type == mt5.ORDER_TYPE_SELL_LIMIT and entry_price <= bid:
-            return False, f"SELL LIMIT entry price must be below the current bid price."
-
+            return False, "SELL LIMIT must be below bid."
         if order_type == mt5.ORDER_TYPE_SELL_STOP and entry_price >= bid:
-            return False, f"SELL STOP entry price must be above the current bid price."
-
+            return False, "SELL STOP must be above bid."
         return True, "Price levels are valid."
 
 
@@ -198,7 +151,6 @@ _trade_calculator = None
 
 
 def get_trade_calculator():
-    """Factory function to get the singleton TradeCalculator instance."""
     global _trade_calculator
     if _trade_calculator is None:
         _trade_calculator = TradeCalculator()

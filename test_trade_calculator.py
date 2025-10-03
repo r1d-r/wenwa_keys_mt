@@ -134,6 +134,24 @@ for name, (expected, sym, o_type, p_entry, p_sl, p_tp) in scenarios.items():
     else:
         print(f"❌ Test FAILED for: {name} - Message: {message}")
 
+# --- Test Pip Distance Calculation ---
+print("-" * 50)
+print("Testing Pip Distance Calculation...")
+
+price1 = 1.25000
+price2 = 1.25255  # Should be 25.5 pips
+expected_pips = 25.5
+
+pips = trade_calculator.calculate_pip_distance(test_symbol, price1, price2)
+if abs(pips - expected_pips) < 0.01:
+    print(
+        f"✓ Test passed for Pip Distance. Expected ~{expected_pips:.1f}, Got {pips:.1f}"
+    )
+else:
+    print(
+        f"❌ Test FAILED for Pip Distance. Expected {expected_pips:.1f}, Got {pips:.1f}"
+    )
+
 # Disconnect
 conn.disconnect()
 print("\n" + "=" * 100)
