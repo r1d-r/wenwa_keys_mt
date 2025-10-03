@@ -25,6 +25,8 @@ config/config.ini
 # Data
 data/*.json
 data/*.db
+md/
+HANDOFF_TEMPLATE.md
 
 # OS
 .DS_Store
