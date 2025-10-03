@@ -1,0 +1,6 @@
+MetaTrader5>=5.0.45
+tkinter-tooltip>=2.1.0
+Pillow>=10.0.0
+pynput>=1.7.6
+keyboard>=0.13.5
+configparser>=6.0.0
