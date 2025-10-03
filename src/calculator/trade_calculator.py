@@ -5,7 +5,12 @@ like lot size, risk/reward, and position value.
 
 from src.config.logger import get_logger
 from src.mt5_manager.connection import get_connection
-from src.mt5_manager.utils import normalize_lot, calculate_pips
+from src.mt5_manager.utils import (
+    normalize_lot,
+    calculate_pips,
+    get_current_ask,
+    get_current_bid,
+)
 
 logger = get_logger(__name__)
 
@@ -125,6 +130,67 @@ class TradeCalculator:
         )
 
         return rr_ratio
+
+    def validate_price_levels(
+        self,
+        symbol: str,
+        order_type: int,
+        entry_price: float,
+        sl_price: float,
+        tp_price: float,
+    ) -> tuple[bool, str]:
+        """
+        Validates if entry, SL, and TP prices are logical for a given order type.
+
+        Args:
+            symbol (str): The symbol to validate against.
+            order_type (int): The MT5 order type constant.
+            entry_price (float): The proposed entry price.
+            sl_price (float): The proposed stop loss price.
+            tp_price (float): The proposed take profit price.
+
+        Returns:
+            tuple[bool, str]: A tuple containing a boolean (True if valid) and a message.
+        """
+        import MetaTrader5 as mt5
+
+        ask = get_current_ask(symbol)
+        bid = get_current_bid(symbol)
+        if not ask or not bid:
+            return False, "Could not fetch current market price for validation."
+
+        # General SL/TP sanity checks
+        is_buy = order_type in [
+            mt5.ORDER_TYPE_BUY,
+            mt5.ORDER_TYPE_BUY_LIMIT,
+            mt5.ORDER_TYPE_BUY_STOP,
+        ]
+        if sl_price != 0.0:
+            if is_buy and sl_price >= entry_price:
+                return False, f"SL for a BUY order must be below the entry price."
+            if not is_buy and sl_price <= entry_price:
+                return False, f"SL for a SELL order must be above the entry price."
+
+        if tp_price != 0.0:
+            if is_buy and tp_price <= entry_price:
+                return False, f"TP for a BUY order must be above the entry price."
+            if not is_buy and tp_price >= entry_price:
+                return False, f"TP for a SELL order must be below the entry price."
+
+        # Pending order entry price checks
+        if order_type == mt5.ORDER_TYPE_BUY_LIMIT and entry_price >= ask:
+            return False, f"BUY LIMIT entry price must be below the current ask price."
+
+        if order_type == mt5.ORDER_TYPE_BUY_STOP and entry_price <= ask:
+            return False, f"BUY STOP entry price must be above the current ask price."
+
+        if order_type == mt5.ORDER_TYPE_SELL_LIMIT and entry_price <= bid:
+            return False, f"SELL LIMIT entry price must be below the current bid price."
+
+        if order_type == mt5.ORDER_TYPE_SELL_STOP and entry_price >= bid:
+            return False, f"SELL STOP entry price must be above the current bid price."
+
+        return True, "Price levels are valid."
 
 
 # --- Singleton Factory ---

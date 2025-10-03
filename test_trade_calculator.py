@@ -1,14 +1,18 @@
 """
-Tests the TradeCalculator class and its lot size calculation method.
+Tests the TradeCalculator class and its methods.
 """
+
+import MetaTrader5 as mt5
 
 from src.mt5_manager.connection import get_connection
 from src.calculator.trade_calculator import get_trade_calculator
+# CORRECTED: Added imports for price and util functions
+from src.mt5_manager.utils import get_current_ask, get_current_bid
 
 print("\nTesting Trade Calculator\n")
 print("=" * 100)
 
-# Connect to get live symbol data for accurate testing
+# Connect
 conn = get_connection()
 if not conn.connect():
     print("❌ Failed to connect to MT5. Cannot perform accurate test.")
@@ -17,8 +21,9 @@ if not conn.connect():
 # --- Test Data ---
 trade_calculator = get_trade_calculator()
 test_balance = 50000.0
-test_risk_percent = 0.5  # Risking 0.5%
+test_risk_percent = 0.5
 test_sl_pips = 25.0
+test_symbol = "GBPUSD"  # Using a consistent symbol for all tests
 
 expected_risk_amount = test_balance * (test_risk_percent / 100)
 print(
@@ -27,10 +32,9 @@ print(
 print(f"Expected amount to risk: ")
 print("-" * 50)
 
-
 def run_symbol_test(symbol: str):
     """Runs the lot size calculation for a given symbol and prints results."""
-    print(f"Testing for symbol: {symbol}...")
+    print(f"Testing Lot Size for symbol: {symbol}...")
 
     calculated_lot = trade_calculator.calculate_lot_size(
         account_balance=test_balance,
@@ -40,45 +44,95 @@ def run_symbol_test(symbol: str):
     )
 
     if calculated_lot > 0:
-        print(f"✓ Test passed for {symbol}. Calculated lot size: {calculated_lot}")
+        print(f"✓ Test passed for Lot Size ({symbol}). Calculated: {calculated_lot}")
     else:
-        print(f"❌ Test FAILED for {symbol}. Result was {calculated_lot}.")
+        print(f"❌ Test FAILED for Lot Size ({symbol}). Result was {calculated_lot}.")
     print("")
 
-
-# --- Run Tests ---
+# --- Run Lot Size Tests ---
 run_symbol_test("EURUSD")
 run_symbol_test("GBPJPY")
-run_symbol_test(
-    "US500Cash"
-)  # S&P 500, adjust symbol name if needed (e.g., SPX500, US500)
-run_symbol_test("XAUUSD")  # Gold
+run_symbol_test("XAUUSD")
 
 # --- Test R:R Calculation ---
 print("-" * 50)
 print("Testing Risk:Reward Calculation...")
-
-# Test Scenario: 20 pips risk, 60 pips reward, should be 1:3
 entry = 1.25000
 sl = 1.24800
 tp = 1.25600
 expected_rr = 3.0
-test_symbol = "GBPUSD"  # Using a non-JPY pair for standard calculation
-
 print(f"Scenario: Entry={entry}, SL={sl} (20 pips), TP={tp} (60 pips)")
-
-rr = trade_calculator.calculate_rr(
-    symbol=test_symbol, entry_price=entry, sl_price=sl, tp_price=tp
-)
-
+rr = trade_calculator.calculate_rr(test_symbol, entry, sl, tp)
 if abs(rr - expected_rr) < 0.01:
-    print(
-        f"✓ Test passed for R:R calculation. Expected ~{expected_rr:.2f}, Got {rr:.2f}"
-    )
+    print(f"✓ Test passed for R:R. Expected ~{expected_rr:.2f}, Got {rr:.2f}")
 else:
-    print(
-        f"❌ Test FAILED for R:R calculation. Expected {expected_rr:.2f}, Got {rr:.2f}"
+    print(f"❌ Test FAILED for R:R. Expected {expected_rr:.2f}, Got {rr:.2f}")
+
+# --- Test Price Level Validation ---
+print("-" * 50)
+print("Testing Price Level Validation...")
+current_ask = get_current_ask(test_symbol)
+current_bid = get_current_bid(test_symbol)
+
+scenarios = {
+    "VALID BUY LIMIT": (
+        True,
+        test_symbol,
+        mt5.ORDER_TYPE_BUY_LIMIT,
+        current_ask - 0.00100,
+        current_ask - 0.00200,
+        current_ask + 0.00100,
+    ),
+    "INVALID BUY LIMIT (Entry > Ask)": (
+        False,
+        test_symbol,
+        mt5.ORDER_TYPE_BUY_LIMIT,
+        current_ask + 0.00100,
+        current_ask - 0.00100,
+        current_ask + 0.00200,
+    ),
+    "VALID BUY STOP": (
+        True,
+        test_symbol,
+        mt5.ORDER_TYPE_BUY_STOP,
+        current_ask + 0.00100,
+        current_ask - 0.00100,
+        current_ask + 0.00200,
+    ),
+    "INVALID SELL (SL < Entry)": (
+        False,
+        test_symbol,
+        mt5.ORDER_TYPE_SELL,
+        current_bid,
+        current_bid - 0.00100,
+        current_bid - 0.00200,
+    ),
+    "VALID SELL": (
+        True,
+        test_symbol,
+        mt5.ORDER_TYPE_SELL,
+        current_bid,
+        current_bid + 0.00100,
+        current_bid - 0.00100,
+    ),
+    "INVALID BUY (TP < Entry)": (
+        False,
+        test_symbol,
+        mt5.ORDER_TYPE_BUY,
+        current_ask,
+        current_ask + 0.00100,
+        current_ask - 0.00100,
+    ),
+}
+
+for name, (expected, sym, o_type, p_entry, p_sl, p_tp) in scenarios.items():
+    is_valid, message = trade_calculator.validate_price_levels(
+        sym, o_type, p_entry, p_sl, p_tp
     )
+    if is_valid == expected:
+        print(f"✓ Test passed for: {name}")
+    else:
+        print(f"❌ Test FAILED for: {name} - Message: {message}")
 
 # Disconnect
 conn.disconnect()
