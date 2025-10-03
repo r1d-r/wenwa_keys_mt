@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.mt5_manager.connection import get_connection
+from src.mt5_manager.connection import get_connection, ensure_connected
 from src.mt5_manager.utils import (
     normalize_price, normalize_lot, get_current_bid, get_current_ask,
     is_buy_order, is_sell_order, get_order_type_string
@@ -52,6 +52,7 @@ class TradingManager:
         self.default_magic = 234000  # Default magic number for Magic Keys
         self.default_deviation = settings.get_int('Trading', 'max_slippage', 5)
 
+    @ensure_connected
     def place_market_order(self,
                           symbol: str,
                           order_type: int,
@@ -140,6 +141,7 @@ class TradingManager:
         # Process result
         return self._process_order_result(result, request)
 
+    @ensure_connected
     def place_pending_order(
         self,
         symbol: str,

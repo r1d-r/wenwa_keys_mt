@@ -342,6 +342,31 @@ def get_connection() -> MT5Connection:
     return connection
 
 
+# --- Connection Decorator ---
+def ensure_connected(func):
+    """
+    A decorator that ensures the MT5 connection is active before calling a function.
+    If disconnected, it will attempt to reconnect.
+    """
+
+    def wrapper(*args, **kwargs):
+        conn = get_connection()
+        if not conn.is_connected():
+            logger.warning(
+                f"Connection lost before calling '{func.__name__}'. Attempting to reconnect..."
+            )
+            if not conn.reconnect():
+                logger.error(
+                    f"Cannot execute '{func.__name__}': MT5 connection is down."
+                )
+                # We can return a default "failure" object, e.g., an empty list or a failed OrderResult
+                # For now, we return None, but this can be customized.
+                return None
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 # Example usage and testing
 if __name__ == "__main__":
     print("\nTesting MT5 Connection Manager\n")
