@@ -145,6 +145,75 @@ class TradeCalculator:
             return False, "SELL STOP must be above bid."
         return True, "Price levels are valid."
 
+    def calculate_position_value(self, symbol: str, lot_size: float) -> float:
+        """
+        Calculates the total monetary value of a position in the account currency.
+
+        Args:
+            symbol (str): The symbol of the position.
+            lot_size (float): The volume of the position in lots.
+
+        Returns:
+            float: The total position value in the account's currency. Returns 0.0 on failure.
+        """
+        account_info = self.conn.get_account_info()
+        symbol_info = self.conn.get_symbol_info(symbol)
+        if not account_info or not symbol_info:
+            return 0.0
+
+        account_currency = account_info.currency
+        contract_size = symbol_info.trade_contract_size
+        calc_mode = symbol_info.trade_calc_mode
+        value = 0.0
+
+        # Logic for CFDs/Metals where value = lots * size * price
+        if calc_mode != mt5.SYMBOL_CALC_MODE_FOREX:
+            price = get_current_ask(symbol)
+            if not price:
+                return 0.0
+
+            value_in_quote_ccy = lot_size * contract_size * price
+            quote_currency = symbol_info.currency_profit
+
+            # Convert if needed
+            if quote_currency == account_currency:
+                value = value_in_quote_ccy
+            else:
+                # Find conversion rate (e.g., from quote_currency to account_currency)
+                pair_price = get_current_ask(f"{quote_currency}{account_currency}")
+                if pair_price:
+                    value = value_in_quote_ccy * pair_price
+                else:
+                    pair_price = get_current_ask(f"{account_currency}{quote_currency}")
+                    if pair_price and pair_price != 0:
+                        value = value_in_quote_ccy / pair_price
+
+        # Logic for Forex where value = lots * size (in base currency)
+        else:
+            value_in_base_ccy = lot_size * contract_size
+            base_currency = symbol_info.currency_base
+
+            # Convert if needed
+            if base_currency == account_currency:
+                value = value_in_base_ccy
+            else:
+                # Find conversion rate (e.g., from base_currency to account_currency)
+                pair_price = get_current_ask(f"{base_currency}{account_currency}")
+                if pair_price:
+                    value = value_in_base_ccy * pair_price
+                else:
+                    # Look for the inverse pair
+                    pair_price = get_current_ask(f"{account_currency}{base_currency}")
+                    if pair_price and pair_price != 0:
+                        value = value_in_base_ccy / pair_price
+
+        if value > 0:
+            logger.info(
+                f"Position Value Calc: {lot_size} lot(s) of {symbol} = {value:,.2f} {account_currency}"
+            )
+
+        return value
+
 
 # --- Singleton Factory ---
 _trade_calculator = None

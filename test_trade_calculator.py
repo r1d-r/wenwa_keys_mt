@@ -152,6 +152,27 @@ else:
         f"❌ Test FAILED for Pip Distance. Expected {expected_pips:.1f}, Got {pips:.1f}"
     )
 
+# --- Test Position Value Calculation ---
+print("-" * 50)
+print("Testing Position Value Calculation...")
+
+# Assuming account currency is USD.
+# Test 1: Forex (EURUSD). 1 lot = 100,000 EUR. Value in USD = 100,000 * EURUSD price.
+eurusd_val = trade_calculator.calculate_position_value("EURUSD", 1.0)
+eurusd_price = get_current_ask("EURUSD")
+if abs(eurusd_val - (100000 * eurusd_price)) < 1:
+    print(f"✓ Test passed for Forex Value (EURUSD). Calculated: ${eurusd_val:,.2f}")
+else:
+    print(f"❌ Test FAILED for Forex Value (EURUSD).")
+
+# Test 2: Metal (XAUUSD). 1 lot = 100oz. Value in USD = 100 * XAUUSD price.
+xauusd_val = trade_calculator.calculate_position_value("XAUUSD", 1.0)
+xauusd_price = get_current_ask("XAUUSD")
+if abs(xauusd_val - (100 * xauusd_price)) < 1:
+    print(f"✓ Test passed for Metal Value (XAUUSD). Calculated: ${xauusd_val:,.2f}")
+else:
+    print(f"❌ Test FAILED for Metal Value (XAUUSD).")
+
 # Disconnect
 conn.disconnect()
 print("\n" + "=" * 100)
